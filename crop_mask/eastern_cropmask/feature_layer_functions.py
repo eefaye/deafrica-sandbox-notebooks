@@ -123,6 +123,7 @@ def gm_mads_three_seasons(ds):
 # Note that 01_Extract_training_data is not Dask friendly
 # Make sure to comment out all chunk notation
 # Comment back in for 04_Predict
+# First drafted 11 November 2020
 
     dc = datacube.Datacube(app='training')
     ds = ds / 10000
@@ -174,6 +175,59 @@ def gm_mads_three_seasons(ds):
                        epoch3,
                        slope],compat='override')
 
+    return result.squeeze()
+
+def gm_three_seasons(ds):
+# With rainfall but no tmads
+# Four-monthly intervals
+# First drafted 12 November 2020
+
+    dc = datacube.Datacube(app='training')
+    ds = ds / 10000
+    ds1 = ds.sel(time=slice('2019-01', '2019-04'))
+    ds2 = ds.sel(time=slice('2019-05', '2019-08')) 
+    ds3 = ds.sel(time=slice('2019-09', '2019-12')) 
+    
+    def fun(ds, era):
+        #geomedian
+        gm = xr_geomedian(ds)
+        gm = calculate_indices(gm,
+                               index=['NDVI', 'LAI'],
+                               drop=False,
+                               normalise=False,
+                               collection='s2')
+        
+        if era == '_S1':
+            chirps = assign_crs(xr.open_rasterio('../data/CHIRPS/CHPclim_jan_apr_cumulative_rainfall.nc'),  crs='epsg:4326')
+        if era == '_S2':
+            chirps = assign_crs(xr.open_rasterio('../data/CHIRPS/CHPclim_may_aug_cumulative_rainfall.nc'),  crs='epsg:4326')
+        if era == '_S3':
+            chirps = assign_crs(xr.open_rasterio('../data/CHIRPS/CHPclim_sep_dec_cumulative_rainfall.nc'),  crs='epsg:4326')
+        
+        chirps = xr_reproject(chirps,ds.geobox,"bilinear")
+        chirps = chirps.chunk({'x':2000,'y':2000})
+        gm['rain'] = chirps
+         
+        for band in gm.data_vars:
+            gm = gm.rename({band:band+era})
+            
+        return gm
+    
+    epoch1 = fun(ds1, era='_S1')
+    epoch2 = fun(ds2, era='_S2')
+    epoch3 = fun(ds3, era='_S3')
+    
+    #slope
+    url_slope = "https://deafrica-data.s3.amazonaws.com/ancillary/dem-derivatives/cog_slope_africa.tif"
+    slope = rio_slurp_xarray(url_slope, gbox=ds.geobox)
+    slope = slope.to_dataset(name='slope').chunk({'x':2000,'y':2000})
+    
+    result = xr.merge([epoch1,
+                       epoch2,
+                       epoch3,
+                       slope],compat='override')
+    result = assign_crs(result, crs=ds.geobox.crs)
+    
     return result.squeeze()
 
 def simple_two_seasons(ds):

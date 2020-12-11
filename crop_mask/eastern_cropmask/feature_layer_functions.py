@@ -1,3 +1,8 @@
+"""
+This script exists simply to keep the notebooks
+'Extract_training_data.ipynb' and 'Predict.ipynb' tidy by
+not clutering them up with custom training data functions.
+"""
 
 import pyproj
 import dask
@@ -11,6 +16,7 @@ import dask.array as da
 from datacube.utils.geometry import assign_crs
 from datacube.testutils.io import rio_slurp_xarray
 from odc.algo import randomize, reshape_for_geomedian, xr_reproject, xr_geomedian
+from odc.algo._dask import reshape_yxbt
 
 sys.path.append('../../Scripts')
 from deafrica_bandindices import calculate_indices
@@ -20,58 +26,7 @@ from deafrica_datahandling import load_ard
 
 warnings.filterwarnings("ignore")
 
-def hdstats_two_seasons(ds):
-    dc = datacube.Datacube(app='training')
-    ds = ds / 10000
-    ds1 = ds.sel(time=slice('2019-01', '2019-06'))
-    ds2 = ds.sel(time=slice('2019-07', '2019-12'))
-    
-    def fun(ds, era):
-        
-        #temporal stats
-        ndvi = calculate_indices(ds,
-                             index=['NDVI'],
-                             drop=True,
-                             collection='s2')
-        #GAP-FLLING AND/OR SMOOTHING
-        ts = temporal_statistics(ndvi.NDVI,
-                           stats=['f_mean', 'abs_change','discordance',
-                                  'complexity','central_diff'])
-        
-        #geomedian and tmads
-        gm_mads = xr_geomedian_tmad(ds)
-        gm_mads = calculate_indices(gm_mads,
-                               index=['NDVI', 'LAI'],
-                               drop=False,
-                               normalise=False,
-                               collection='s2')
-        gm_mads['edev'] = -np.log(gm_mads['edev'])
-        gm_mads['sdev'] = -np.log(gm_mads['sdev'])
-        gm_mads['bcdev'] = -np.log(gm_mads['bcdev'])
-        
-        #merge
-        res = xr.merge([gm_mads,ts],compat='override')
-        
-        for band in res.data_vars:
-            res = res.rename({band:band+era})
-        
-        return res
-    
-    epoch1 = fun(ds1, era='_S1')
-    epoch2 = fun(ds2, era='_S2')
-    
-    #slope
-    url_slope = "https://deafrica-data.s3.amazonaws.com/ancillary/dem-derivatives/cog_slope_africa.tif"
-    slope = rio_slurp_xarray(url_slope, gbox=ds.geobox)
-    slope = slope.to_dataset(name='slope')
-    
-    result = xr.merge([epoch1,epoch2,slope],compat='override')
-    result = assign_crs(result, crs=ds.geobox.crs)#.chunk({'x':2000,'y':2000})
-    
-    return result.squeeze()
-
-
-def gm_mads_two_seasons(ds):
+def gm_mads_two_seasons_predict(ds):
     dc = datacube.Datacube(app='training')
     ds = ds / 10000
     ds1 = ds.sel(time=slice('2019-01', '2019-06'))
@@ -79,7 +34,8 @@ def gm_mads_two_seasons(ds):
     
     def fun(ds, era):
         #geomedian and tmads
-        gm_mads = xr_geomedian_tmad(ds)
+        #gm_mads = xr_geomedian_tmad(ds)
+        gm_mads = xr_geomedian_tmad_new(ds).compute()
         gm_mads = calculate_indices(gm_mads,
                                index=['NDVI','LAI','MNDWI'],
                                drop=False,
@@ -89,6 +45,7 @@ def gm_mads_two_seasons(ds):
         gm_mads['sdev'] = -np.log(gm_mads['sdev'])
         gm_mads['bcdev'] = -np.log(gm_mads['bcdev'])
         gm_mads['edev'] = -np.log(gm_mads['edev'])
+        gm_mads = gm_mads.chunk({'x':2000,'y':2000})
         
         #rainfall climatology
         if era == '_S1':
@@ -118,26 +75,39 @@ def gm_mads_two_seasons(ds):
                        slope],compat='override')
 
     return result.squeeze()
- 
-def simple_two_seasons(ds):
+
+def gm_mads_two_seasons_training(ds):
     dc = datacube.Datacube(app='training')
     ds = ds / 10000
     ds1 = ds.sel(time=slice('2019-01', '2019-06'))
-    ds2 = ds.sel(time=slice('2019-07', '2019-12'))
+    ds2 = ds.sel(time=slice('2019-07', '2019-12')) 
     
     def fun(ds, era):
-        #geomedian
-        gm = xr_geomedian(ds)
-        gm = calculate_indices(gm,
-                               index=['NDVI', 'LAI'],
+        #geomedian and tmads
+        gm_mads = xr_geomedian_tmad(ds)
+        gm_mads = calculate_indices(gm_mads,
+                               index=['NDVI','LAI','MNDWI'],
                                drop=False,
                                normalise=False,
                                collection='s2')
         
-        for band in gm.data_vars:
-            gm = gm.rename({band:band+era})
+        gm_mads['sdev'] = -np.log(gm_mads['sdev'])
+        gm_mads['bcdev'] = -np.log(gm_mads['bcdev'])
+        gm_mads['edev'] = -np.log(gm_mads['edev'])
         
-        return gm
+        #rainfall climatology
+        if era == '_S1':
+            chirps = assign_crs(xr.open_rasterio('../data/CHIRPS/CHPclim_jan_jun_cumulative_rainfall.nc'),  crs='epsg:4326')
+        if era == '_S2':
+            chirps = assign_crs(xr.open_rasterio('../data/CHIRPS/CHPclim_jul_dec_cumulative_rainfall.nc'),  crs='epsg:4326')
+        
+        chirps = xr_reproject(chirps,ds.geobox,"bilinear")
+        gm_mads['rain'] = chirps
+        
+        for band in gm_mads.data_vars:
+            gm_mads = gm_mads.rename({band:band+era})
+        
+        return gm_mads
     
     epoch1 = fun(ds1, era='_S1')
     epoch2 = fun(ds2, era='_S2')
@@ -147,10 +117,12 @@ def simple_two_seasons(ds):
     slope = rio_slurp_xarray(url_slope, gbox=ds.geobox)
     slope = slope.to_dataset(name='slope')
     
-    result = xr.merge([epoch1,epoch2,slope],compat='override')
-    result = assign_crs(result, crs=ds.geobox.crs)
-    
+    result = xr.merge([epoch1,
+                       epoch2,
+                       slope],compat='override')
+
     return result.squeeze()
+
 
 
 def xr_geomedian_tmad(ds, axis='time', where=None, **kw):
@@ -248,45 +220,61 @@ def xr_geomedian_tmad(ds, axis='time', where=None, **kw):
     return assign_crs(ds_out, crs=ds.geobox.crs)
 
 
-# import richdem as rd
-# def xr_terrain(da, attribute=None):
-#     """
-#     Using the richdem package, calculates terrain attributes
-#     on a DEM stored in memory as an xarray.DataArray 
+def xr_geomedian_tmad_new(ds, **kw):
+    """
+    Same as other one but uses reshape_yxbt instead of
+    reshape_for_geomedian
+    """
+
+    import hdstats
+    def gm_tmad(arr, **kw):
+        """
+        arr: a high dimensional numpy array where the last dimension will be reduced. 
     
-#     Params
-#     -------
-#     da : xr.DataArray
-#     attribute : str
-#         One of the terrain attributes that richdem.TerrainAttribute()
-#         has implemented. e.g. 'slope_riserun', 'slope_percentage', 'aspect'.
-#         See all option here:  
-#         https://richdem.readthedocs.io/en/latest/python_api.html#richdem.TerrainAttribute
-        
-#     """
-#     #remove time if its there
-#     da = da.squeeze()
-#     #convert to richdem array
-#     rda = rd.rdarray(da.data, no_data=da.attrs['nodata'])
-#     #add projection and geotransform
-#     rda.projection=pyproj.crs.CRS(da.attrs['crs']).to_wkt()
-#     rda.geotransform = da.geobox.affine.to_gdal()
-#     #calulate attribute
-#     attrs = rd.TerrainAttribute(rda, attrib=attribute)
+        returns: a numpy array with one less dimension than input.
+        """
+        gm = hdstats.nangeomedian_pcm(arr, **kw)
+        nt = kw.pop('num_threads', None)
+        emad = hdstats.emad_pcm(arr, gm, num_threads=nt)[:,:, np.newaxis]
+        smad = hdstats.smad_pcm(arr, gm, num_threads=nt)[:,:, np.newaxis]
+        bcmad = hdstats.bcmad_pcm(arr, gm, num_threads=nt)[:,:, np.newaxis]
+        return np.concatenate([gm, emad, smad, bcmad], axis=-1)
 
-#     #return as xarray DataArray
-#     return xr.DataArray(attrs,
-#                         attrs=da.attrs,
-#                         coords={'x':da.x, 'y':da.y},
-#                         dims=['y', 'x'])
 
-   
-#     slope = dc.load(product='srtm', like=ds.geobox).squeeze()
-#     slope = slope.elevation
-#     slope = xr_terrain(slope, 'slope_riserun')
-#     slope = slope.to_dataset(name='slope')#.chunk({'x':1500,'y':1500})
+    def norm_input(ds):
+        if isinstance(ds, xr.Dataset):
+            xx = reshape_yxbt(ds, yx_chunks=500)
+            return ds, xx, xx.data
 
-#     #rainfall climatology
-#     chirps = assign_crs(xr.open_rasterio('../data/CHIRPS/CHPclim_annualSum.nc'),  crs='epsg:4326')
-#     chirps = xr_reproject(chirps,ds.geobox,"bilinear")
-#     chirps = chirps.to_dataset(name='rainfall').chunk({'x':2000,'y':2000})
+    kw.setdefault('nocheck', False)
+    kw.setdefault('num_threads', 1)
+    kw.setdefault('eps', 1e-6)
+
+    ds, xx, xx_data = norm_input(ds)
+    is_dask = dask.is_dask_collection(xx_data)
+
+    if is_dask:
+        data = da.map_blocks(lambda x: gm_tmad(x, **kw),
+                             xx_data,
+                             name=randomize('geomedian'),
+                             dtype=xx_data.dtype, 
+                             chunks=xx_data.chunks[:-2] + (xx_data.chunks[-2][0]+3,),
+                             drop_axis=3)
+    
+    dims = xx.dims[:-1]
+    cc = {k: xx.coords[k] for k in dims}
+    cc[dims[-1]] = np.hstack([xx.coords[dims[-1]].values,['edev', 'sdev', 'bcdev']])
+    xx_out = xr.DataArray(data, dims=dims, coords=cc)
+
+    if ds is None:
+        xx_out.attrs.update(xx.attrs)
+        return xx_out
+
+    ds_out = xx_out.to_dataset(dim='band')
+    for b in ds.data_vars.keys():
+        src, dst = ds[b], ds_out[b]
+        dst.attrs.update(src.attrs)
+
+    return assign_crs(ds_out, crs=ds.geobox.crs)
+
+

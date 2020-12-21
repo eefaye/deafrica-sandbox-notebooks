@@ -89,6 +89,8 @@ def xr_tmad(ds, gm, axis='time', where=None, **kw):
         set_nan = None
 
     if is_dask:
+#         print(gm)
+#         print(xx_data)
         if xx_data.shape[-2:] != xx_data.chunksize[-2:]:
             xx_data = xx_data.rechunk(xx_data.chunksize[:2] + (-1, -1))
         print(xx_data.chunks[:-2] + (xx_data.chunks[-2][0]+3,))
@@ -108,24 +110,24 @@ def xr_tmad(ds, gm, axis='time', where=None, **kw):
         return data
     print(data)
     
-    return data
-#     dims = xx.dims[:-1]
-#     #print(dims)
-#     cc = {k: xx.coords[k] for k in dims}
-#     #print(cc)
-#     cc[dims[-1]] = np.hstack([xx.coords[dims[-1]].values,['edev', 'sdev', 'bcdev']])
-#     #print(cc)
-#     xx_out = xr.DataArray(data, dims=dims, coords=cc)
-#     #print(xx_out)
-#     if ds is None:
-#         xx_out.attrs.update(xx.attrs)
-#         return xx_out
+    #return data
+    dims = xx.dims[:-1]
+    #print(dims)
+    cc = {k: xx.coords[k] for k in dims}
+    #print(cc)
+    cc[dims[-1]] = np.hstack([xx.coords[dims[-1]].values,['edev', 'sdev', 'bcdev']])
+    #print(cc)
+    xx_out = xr.DataArray(data, dims=dims, coords=cc)
+    #print(xx_out)
+    if ds is None:
+        xx_out.attrs.update(xx.attrs)
+        return xx_out
 
-#     ds_out = xx_out.to_dataset(dim='band')
-#     ds_out=ds_out.drop(['red', 'blue', 'green', 'nir', 'swir_1', 'swir_2', 'red_edge_1',
-#                 'red_edge_2', 'red_edge_3'])
+    ds_out = xx_out.to_dataset(dim='band')
+    ds_out=ds_out.drop(['red', 'blue', 'green', 'nir', 'swir_1', 'swir_2', 'red_edge_1',
+                'red_edge_2', 'red_edge_3'])
 
-#     return assign_crs(ds_out, crs=ds.geobox.crs)
+    return assign_crs(ds_out, crs=ds.geobox.crs)
 
 def gm_two_seasons_annual_mads(ds):
     dc = datacube.Datacube(app='training')
@@ -136,7 +138,7 @@ def gm_two_seasons_annual_mads(ds):
     gm = dc.load(product='ga_s2_gm', like=ds, measurements = [
                 'red', 'blue', 'green', 'nir', 'swir_1', 'swir_2', 'red_edge_1',
                 'red_edge_2', 'red_edge_3'],
-                 dask_chunks={'x':1500,'y':1500}
+                 dask_chunks={'x':600,'y':700}
                 ) 
     
     gm = reshape_for_geomedian(gm)

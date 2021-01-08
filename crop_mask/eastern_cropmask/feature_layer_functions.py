@@ -94,6 +94,7 @@ def xr_tmad(ds, gm, axis='time', where=None, **kw):
         if xx_data.shape[-2:] != xx_data.chunksize[-2:]:
             xx_data = xx_data.rechunk(xx_data.chunksize[:2] + (-1, -1))
         print(xx_data.chunks[:-2] + (xx_data.chunks[-2][0]+3,))
+        # dcan't use apply_ufunc because of no chunking along core axis??
         data = da.map_blocks(lambda x,g: tmad(x, g, **kw),
                              xx_data, gm,
                              name=randomize('tmads'),
